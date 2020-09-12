@@ -11,7 +11,12 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy import stats
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.model_selection import cross_val_score
+from sklearn.utils import shuffle
 from sklearn.decomposition import PCA
+
 
 #%% Get data
 x_train = pd.read_csv('./data/train_features.csv')
@@ -55,7 +60,7 @@ print('Features with missing values in test dataset')
 print([c for c in x_test.columns if x_test.isnull().sum()[c] != 0])
 # Empty
 
-#%% 2
+#%% 2 - Using column wise comparison to determining if the train and test dataset come from the same population
 # Features['cp_type', 'cp_time', 'cp_dose'] are categorical while the rest are numerical
 # Comparing levels of categorical features across train and test dataset
 cat_feats = ['cp_type', 'cp_time', 'cp_dose']
@@ -112,7 +117,7 @@ print(np.array(diff_pop_cols))
  'c-86' 'c-87' 'c-93' 'c-96']
 '''
 
-#%% 3 - For the columns that do indeed come from the same population, does PCA reduce the dimensionality
+#% For the columns that do indeed come from the same population, does PCA reduce the dimensionality
 
 # Combining train and test datasets including only those columns that likely come from the same population
 cols_to_ignore = cat_feats + diff_pop_cols
@@ -131,3 +136,39 @@ print('95%% of the variance is explained by the first %i principal components'
       % len(exp_var_ratio[exp_var_ratio <= 0.95]))
 # 470
 
+#%% 3 - Using a classifier approach to determine if the train and test dataset come from the same population
+
+# Dropping column sig_id and combining train and test data. One-hot encode categorical variables
+dat = pd.concat([x_train.iloc[:, 1:], x_test.iloc[:, 1:]], axis = 0)
+dat.loc[:, ['cp_time', 'cp_type', 'cp_dose']] = dat.loc[:, ['cp_time', 'cp_type', 'cp_dose']].astype('category')
+dat = pd.get_dummies(dat)
+# Create Target Variable
+s = np.concatenate((np.ones((len(x_train), ), dtype = 'int'), 
+                    np.zeros((len(x_test), ), dtype = 'int'))).flatten()
+dat['target'] = s
+# Shuffle the rows of the dataframe
+dat = shuffle(dat)
+dat.reset_index(inplace = True, drop = True)
+
+# Fitting a LogisticRegression estimator and estimating 5-fold cross validated ROC_AUC
+est = LogisticRegression(max_iter = 1000)
+cv_scores = cross_val_score(est, X = dat.iloc[:, :-1], y = dat['target'], 
+                            scoring = 'roc_auc', n_jobs = -1, 
+                            pre_dispatch = '1.5*n_jobs')
+print('Estimated 5-fold cross validated roc_auc %.4f' % np.mean(cv_scores))
+
+# The ROC_AUC for the classifier ~50%. This indicates that the classifier is not able to meaningfully differentiate between train and test rows i.e. train and test come from the same population
+
+# Does PCA help with dimensionality reduction
+pca = PCA()
+model = pca.fit(dat.iloc[:, :-1])
+exp_var_ratio = model.explained_variance_ratio_
+exp_var_ratio = np.cumsum(exp_var_ratio)
+
+print('95%% of the variance is explained by the first %i principal components' 
+      % len(exp_var_ratio[exp_var_ratio <= 0.95]))
+# 543 - 62% of total
+
+print('99%% of the variance is explained by the first %i principal components' 
+      % len(exp_var_ratio[exp_var_ratio <= 0.99]))
+# 782 - 89% of total
