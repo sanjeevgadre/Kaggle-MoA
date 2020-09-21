@@ -12,10 +12,9 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from scipy import stats
 from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.model_selection import cross_val_score
-from sklearn.utils import shuffle
 from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
 
 
 #%% Get data
@@ -139,20 +138,20 @@ print('95%% of the variance is explained by the first %i principal components'
 #%% 3 - Using a classifier approach to determine if the train and test dataset come from the same population
 
 # Dropping column sig_id and combining train and test data. One-hot encode categorical variables
-dat = pd.concat([x_train.iloc[:, 1:], x_test.iloc[:, 1:]], axis = 0)
-dat.loc[:, ['cp_time', 'cp_type', 'cp_dose']] = dat.loc[:, ['cp_time', 'cp_type', 'cp_dose']].astype('category')
-dat = pd.get_dummies(dat)
+df = pd.concat([x_train.iloc[:, 1:], x_test.iloc[:, 1:]], axis = 0)
+df.loc[:, ['cp_time', 'cp_type', 'cp_dose']] = df.loc[:, ['cp_time', 'cp_type', 'cp_dose']].astype('category')
+#Standardizing the feature columns
+df = pd.DataFrame(data = StandardScaler().fit_transform(df), columns = df.columns)
+df = pd.get_dummies(df)
 # Create Target Variable
 s = np.concatenate((np.ones((len(x_train), ), dtype = 'int'), 
                     np.zeros((len(x_test), ), dtype = 'int'))).flatten()
-dat['target'] = s
-# Shuffle the rows of the dataframe
-dat = shuffle(dat)
-dat.reset_index(inplace = True, drop = True)
+df['target'] = s
+df.reset_index(inplace = True, drop = True)
 
 # Fitting a LogisticRegression estimator and estimating 5-fold cross validated ROC_AUC
 est = LogisticRegression(max_iter = 1000)
-cv_scores = cross_val_score(est, X = dat.iloc[:, :-1], y = dat['target'], 
+cv_scores = cross_val_score(est, X = df.iloc[:, :-1], y = df['target'], 
                             scoring = 'roc_auc', n_jobs = -1, 
                             pre_dispatch = '1.5*n_jobs')
 print('Estimated 5-fold cross validated roc_auc %.4f' % np.mean(cv_scores))
@@ -161,7 +160,7 @@ print('Estimated 5-fold cross validated roc_auc %.4f' % np.mean(cv_scores))
 
 # Does PCA help with dimensionality reduction
 pca = PCA()
-model = pca.fit(dat.iloc[:, :-1])
+model = pca.fit(df.iloc[:, :-1])
 exp_var_ratio = model.explained_variance_ratio_
 exp_var_ratio = np.cumsum(exp_var_ratio)
 
@@ -172,3 +171,17 @@ print('95%% of the variance is explained by the first %i principal components'
 print('99%% of the variance is explained by the first %i principal components' 
       % len(exp_var_ratio[exp_var_ratio <= 0.99]))
 # 782 - 89% of total
+
+#%% 4 Combining the conclusions in <2> and <3> above to arrive at sample weights for training dataset
+
+model = est.fit(X = df.iloc[:, :-1], y = df['target'])
+# Predicting class probabilities for train examples (more like train or test data)
+probs = model.predict_proba(df.iloc[:len(x_train), :-1])
+wts = probs[:,0]/probs[:,1]
+# Normalizing wts
+wts = wts/np.mean(wts)
+
+plt.figure()
+plt.hist(wts, bins = 100)
+plt.show()
+plt.close()
